@@ -1,0 +1,12 @@
+>NdeI
+CATATG
+>XhoI
+CTCGAG
+>HpaI
+GTTAAC
+>PstI
+CTGCAG
+>EcoRV
+GATATC
+>NcoI
+CCATGG
