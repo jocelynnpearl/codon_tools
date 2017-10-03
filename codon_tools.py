@@ -36,10 +36,10 @@ from Bio.SeqUtils import seq3
 #		4) stochastically mutates overused codons to underused codons.
 #		5) runs a series of other checks and optimizations:
 #			a) checks sequence for GC content and mutates codons to fall into a reasonable GC % (monte carlo)
-#			b) checks for "local homopolymers", if there are areas with more than 4 (variable) consecutive identical bps, stochastically mutate the codons.
-#			c) checks for unwanted restriction sites, stochastically mutate the codons if found.
-#			d) looks for all ATG sequences, then checks 18bp upstream of it for GA -rich regions. If found, mutate the codons.
-#			e) looks for 3-consecutive identical codons and 9-mer repeat chunks (in frame to speed stuff up) and mutate them away.
+#			b) checks for unwanted restriction sites, stochastically mutate the codons if found.
+#			c) looks for all ATG sequences, then checks 18bp upstream of it for GA -rich regions. If found, mutate the codons.
+#			d) looks for 3-consecutive identical codons and 9-mer repeat chunks (in frame to speed stuff up) and mutate them away.
+#			e) checks for "local homopolymers", if there are areas with more than 4 (variable) consecutive identical bps, stochastically mutate the codons.
 #		6) repeat from step 3.
 #		7) cycles through until (variable) cycles are hit OR there the per-AA codon profile of current DNA and host profile matches (and passes the checks).
 #
@@ -51,7 +51,7 @@ from Bio.SeqUtils import seq3
 #options
 parser = argparse.ArgumentParser(
 	description='Optimize your AA or DNA sequence to harmonize with a host\'s condon usage.',
-	epilog='2017-09-26, v0.45 (contact yhsia@uw.edu if stuff does not work)' )
+	epilog='2017-10-03, v0.46 (contact yhsia@uw.edu if stuff does not work)' )
 
 parser.add_argument('--input', type=str, required=True, help='input file with sequence' )
 parser.add_argument('--type', type=str, default='AA', choices=['AA', 'DNA'], help='is your input AA or DNA?' )
@@ -60,7 +60,7 @@ parser.add_argument('--host_threshold', type=float, default='0.10', help='lowest
 #parser.add_argument('--n_terminal_rares', type=bool, default='true', help='optimize the first 11 AAs 
 parser.add_argument('--verbose', type=int, default=0, choices=[0, 1, 2, 3], help='verbose output level (0=only result, 1=standard output, 2=extra output 3=debugging)' )
 parser.add_argument('--local_homopolymer_threshold', type=int, default='4', help='number of consecutive NT repeats allowed' )
-parser.add_argument('--cycles', type=int, default=200, help='max number of cycles to run optimization' )
+parser.add_argument('--cycles', type=int, default=200, help='max number of cycles to run optimization, 0=unlimited' )
 
 args = parser.parse_args()
 
@@ -333,29 +333,34 @@ def optimize_sequence( input, mutation_profile ):
 #check for local homopolymers
 def remove_local_homopolymers( input ):
 	if args.verbose >= 1: print ( "===== REMOVE LOCAL HOMOPOLYMERS =====" )
-	#look at each 6-mer
-	for x in range(0, ( len( input ) - 1 ) ):
-		mer = list( input[x][1] + input[x+1][1] )
-
-		for base in ["T","C","A","G" ]:
-			counter=0
-			found=0
-			max_found=0
-			while counter < len( mer ):
-				if base == mer[ counter ]:
-					found += 1
-					if found > max_found:
-						max_found=found
+	check=0
+	while ( check != 1 ):
+		#look at each 6-mer
+		for x in range(0, ( len( input ) - 1 ) ):
+			mer = list( input[x][1] + input[x+1][1] )
+	
+			for base in ["T","C","A","G" ]:
+				counter=0
+				found=0
+				max_found=0
+				while counter < len( mer ):
+					if base == mer[ counter ]:
+						found += 1
+						if found > max_found:
+							max_found=found
+					else:
+						found=0
+					counter += 1
+				
+				if max_found > args.local_homopolymer_threshold:
+					if args.verbose >= 2:
+						print( "position: {0}: {1}".format( x*3, mer ) )
+						print( "{0}, count={1}".format( base, max_found ) )
+					apply_mutation( input, x )
+					apply_mutation( input, x+1 )
+					check = 0
 				else:
-					found=0
-				counter += 1
-			
-			if max_found > args.local_homopolymer_threshold:
-				if args.verbose >= 2:
-					print( "position: {0}: {1}".format( x*3, mer ) )
-					print( "{0}, count={1}".format( base, max_found ) )
-				apply_mutation( input, x )
-				apply_mutation( input, x+1 )
+					check = 1
 	return input
 
 #parse unwanted sites file
@@ -487,8 +492,9 @@ def apply_mutation( input, position, old_codon=[] ):
 #dumps name of sequence
 def dump_name( input ):
 	if args.verbose >= 1: print( "===== SEQUENCE NAME =====" )
-	print( "{0}".format( sequences[ count ][0] ) )
-
+	print( "{0}".format( sequences[ count ][0] ), end=' ' )
+	if args.verbose >= 1: print( '' )
+	
 #dumps string from triplet sequence
 def dump_sequence( input ):
 	if args.verbose >= 1: print( "===== DUMPING SEQUENCE =====" )
@@ -626,9 +632,33 @@ for count, seq in enumerate( sequences ):
 	
 	#run optimization
 	cycles_current=0
+	
+	#count codons and current profile
+	count_table = count_codons( input_dna )
+	input_profile = calc_profile( count_table )
+	
+	#compare input and host profiles
+	mutation_table, diff = compare_profiles( input_profile, host_profile )
 	difference=1
-	while ( cycles_current < args.cycles ) and ( difference != 0 ):
+	
+	while ( ( cycles_current < args.cycles ) or ( args.cycles == 0 ) ) and ( difference != 0 ):
 		if args.verbose >= 1: print( "~~~~~~~~~~ Current cycle: {0}/{1} ~~~~~~~~~~".format( cycles_current+1, args.cycles ) )
+		
+		#mutate residues to match host profile
+		input_dna = optimize_sequence( input_dna, mutation_table )
+		#check GC content in window
+		gc_scan( input_dna, 50, 0.15, 0.80 )
+		gc_scan( input_dna, 100, 0.25, 0.75 )
+		gc_scan( input_dna, len( input_dna )*3, 0.3, 0.65 )
+		#check for unwanted restriction sites
+		if len( restrict_sites ) != 0: remove_restriction_sites( input_dna, restrict_sites )
+		#check for alternative start sites
+		if len( start_sites ) != 0: remove_start_sites( input_dna, start_sites )
+		#check for repeat fragments
+		repeat_scan( input_dna, 9 )
+		#check for local homopolymers
+		remove_local_homopolymers( input_dna )
+		
 		#count codons and current profile
 		count_table = count_codons( input_dna )
 		input_profile = calc_profile( count_table )
@@ -636,29 +666,9 @@ for count, seq in enumerate( sequences ):
 		#compare input and host profiles
 		mutation_table, diff = compare_profiles( input_profile, host_profile )
 		difference=diff
-		
-		#cycle through all the optimization
-		if difference != 0:
-			#mutate residues to match host profile
-			input_dna = optimize_sequence( input_dna, mutation_table )
-			#check GC content in window
-			gc_scan( input_dna, 50, 0.15, 0.80 )
-			gc_scan( input_dna, 100, 0.25, 0.75 )
-			gc_scan( input_dna, len( input_dna )*3, 0.3, 0.65 )
-			#check for local homopolymers
-			remove_local_homopolymers( input_dna )
-			#check for unwanted restriction sites
-			if len( restrict_sites ) != 0: remove_restriction_sites( input_dna, restrict_sites )
-			#check for alternative start sites
-			if len( start_sites ) != 0: remove_start_sites( input_dna, start_sites )
-			#check for repeat fragments
-			repeat_scan( input_dna, 9 )
 			
 		#tick cycle
 		cycles_current += 1
-	
-	#dump result name
-	dump_name( input_dna )
 	
 	#compare AA usage profile if you hit the max number of cycles
 	if cycles_current == args.cycles:
@@ -671,8 +681,8 @@ for count, seq in enumerate( sequences ):
 	if args.verbose >= 1: print( "===== GC CONTENT =====" )
 	gc_percent = round( gc_content( input_dna ), 3 )
 	if gc_percent < 0.3 or gc_percent > 0.65: print( "WARNING: total GC content is {0}!".format( gc_percent ) )
-	
-	#dump sequence
-	dump_sequence( input_dna )
 
+	#dump result name and sequence
+	dump_name( input_dna )
+	dump_sequence( input_dna )
 #end
