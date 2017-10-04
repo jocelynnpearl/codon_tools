@@ -60,7 +60,7 @@ parser.add_argument('--host_threshold', type=float, default='0.10', help='lowest
 #parser.add_argument('--n_terminal_rares', type=bool, default='true', help='optimize the first 11 AAs 
 parser.add_argument('--verbose', type=int, default=0, choices=[0, 1, 2, 3], help='verbose output level (0=only result, 1=standard output, 2=extra output 3=debugging)' )
 parser.add_argument('--local_homopolymer_threshold', type=int, default='4', help='number of consecutive NT repeats allowed' )
-parser.add_argument('--cycles', type=int, default=200, help='max number of cycles to run optimization, 0=unlimited' )
+parser.add_argument('--cycles', type=int, default=1000, help='max number of cycles to run optimization, 0=unlimited' )
 
 args = parser.parse_args()
 
@@ -408,13 +408,13 @@ def remove_restriction_sites( input, restrict_sites ):
 	return input
 	
 #check for alternative start sites
-def remove_start_sites( input, start_sites ):
-	if args.verbose >= 1: print ( "===== REMOVE START SITES =====" )
+def remove_start_sites( input, start_sites, start_codon ):
+	if args.verbose >= 1: print ( "===== REMOVE START SITES: {0} =====".format( start_codon ) )
 
 	#create sequence in a single string
 	seq = ''.join( codon for innerlist in input for codon in innerlist[1] )
-	#find all start codon sites (ATG)
-	find_start = [ m.start() for m in re.finditer('ATG', seq ) ]
+	#find all start codon sites (xTG)
+	find_start = [ m.start() for m in re.finditer( start_codon, seq ) ]
 	if len( find_start ) == 0:
 		if args.verbose >= 1: print( "No start codon found in sequence" )
 		return input
@@ -456,9 +456,7 @@ def mutate_codon( codon_in ):
 	random.seed()
 	AA=str(seq3( str( Seq( codon_in[1], IUPAC.unambiguous_dna ).translate() ) )).upper() 
 	num_codons=len( CodonUsage.SynonymousCodons[ AA ] )
-	
-	##BLOCK HERE TO SKIP LOCKED CODONS
-	
+		
 	#pick new codon
 	codon_out=random.choice( CodonUsage.SynonymousCodons[ AA ] )
 	while ( codon_in[1] == codon_out ) and ( num_codons != 1 ):
@@ -553,7 +551,10 @@ def repeat_scan( input, frag_size ):
 	splices = [ input[ i: i + window ] for i in range( 0, len( input ) - 2,  window - overlap ) ]
 	
 	loop_this = 1
-	while loop_this != 0:
+	#this to make sure poly-TRP or poly-MET won't just infinite loop
+	loop_break = 0
+	
+	while ( loop_this != 0 ) and ( loop_break < ( window * 10 ) ):
 		#loop this if any mutation is made, until it passes through both checks without mutations
 		loop_this = 0
 		#loop through each segment
@@ -579,6 +580,7 @@ def repeat_scan( input, frag_size ):
 					position = random.randint( 0, ( frag_size / 3 ) - 1 )
 					apply_mutation( segment, position )
 				loop_this += 1
+		loop_break += 1
 	return input
 
 ##########################################################
@@ -653,7 +655,9 @@ for count, seq in enumerate( sequences ):
 		#check for unwanted restriction sites
 		if len( restrict_sites ) != 0: remove_restriction_sites( input_dna, restrict_sites )
 		#check for alternative start sites
-		if len( start_sites ) != 0: remove_start_sites( input_dna, start_sites )
+		if len( start_sites ) != 0: remove_start_sites( input_dna, start_sites, 'ATG' )
+		if len( start_sites ) != 0: remove_start_sites( input_dna, start_sites, 'GTG' )
+		if len( start_sites ) != 0: remove_start_sites( input_dna, start_sites, 'TTG' )
 		#check for repeat fragments
 		repeat_scan( input_dna, 9 )
 		#check for local homopolymers
@@ -670,12 +674,9 @@ for count, seq in enumerate( sequences ):
 		#tick cycle
 		cycles_current += 1
 	
-	#compare AA usage profile if you hit the max number of cycles
+	#hit the max number of cycles?
 	if cycles_current == args.cycles:
-		print( "You hit the max number of cycles: {0}".format( args.cycles ) )
-		count_table = count_codons( input_dna )
-		input_profile = calc_profile( count_table )
-		mutation_table, diff = compare_profiles( input_profile, host_profile )
+		if args.verbose >= 1: print( "You hit the max number of cycles: {0}".format( args.cycles ) )
 
 	#check GC content
 	if args.verbose >= 1: print( "===== GC CONTENT =====" )
@@ -684,5 +685,7 @@ for count, seq in enumerate( sequences ):
 
 	#dump result name and sequence
 	dump_name( input_dna )
+	#dumps a decimal of final difference (0.00 is ideal)
+	if args.verbose <= 0: print( "({0})".format( round( difference, 2 ) ), end=" " )
 	dump_sequence( input_dna )
 #end
