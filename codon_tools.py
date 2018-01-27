@@ -37,11 +37,11 @@ from Bio.SeqUtils import seq3
 #		5) runs a series of other checks and optimizations:
 #			a) checks sequence for GC content and mutates codons to fall into a reasonable GC % (monte carlo)
 #			b) checks for unwanted restriction sites, stochastically mutate the codons if found.
-#			c) looks for all ATG sequences, then checks 18bp upstream of it for GA -rich regions. If found, mutate the codons.
+#			c) looks for all ATG/GTG/TTG sequences, then checks 18bp upstream of it for GA -rich regions. If found, mutate the codons.
 #			d) looks for 3-consecutive identical codons and 9-mer repeat chunks (in frame to speed stuff up) and mutate them away.
 #			e) checks for "local homopolymers", if there are areas with more than 4 (variable) consecutive identical bps, stochastically mutate the codons.
 #		6) repeat from step 3.
-#		7) cycles through until (variable) cycles are hit OR there the per-AA codon profile of current DNA and host profile matches (and passes the checks).
+#		7) cycles through until (variable) cycles are hit OR there the per-AA codon profile of current DNA and host profile matches, given a maximum deviation (and passes the checks).
 #
 #	To do:
 #		1) remove RNA structure from sequence
@@ -51,7 +51,7 @@ from Bio.SeqUtils import seq3
 #options
 parser = argparse.ArgumentParser(
 	description='Optimize your AA or DNA sequence to harmonize with a host\'s condon usage.',
-	epilog='2017-10-03, v0.46 (contact yhsia@uw.edu if stuff does not work)' )
+	epilog='2017-12-04, v0.47 (contact yhsia@uw.edu if stuff does not work)' )
 
 parser.add_argument('--input', type=str, required=True, help='input file with sequence' )
 parser.add_argument('--type', type=str, default='AA', choices=['AA', 'DNA'], help='is your input AA or DNA?' )
@@ -61,6 +61,7 @@ parser.add_argument('--host_threshold', type=float, default='0.10', help='lowest
 parser.add_argument('--verbose', type=int, default=0, choices=[0, 1, 2, 3], help='verbose output level (0=only result, 1=standard output, 2=extra output 3=debugging)' )
 parser.add_argument('--local_homopolymer_threshold', type=int, default='4', help='number of consecutive NT repeats allowed' )
 parser.add_argument('--cycles', type=int, default=1000, help='max number of cycles to run optimization, 0=unlimited' )
+parser.add_argument('--max_relax', type=float, default='0.1', help='maximum % deviation from host profile' )
 
 args = parser.parse_args()
 
@@ -204,11 +205,12 @@ def removekey(d, key):
     return r
     
 #returns dictionary of comparison between two profiles
-def compare_profiles( input, host ):
+def compare_profiles( input, host, relax ):
 	if args.verbose >= 1: print( "===== COMPARING PROFILES =====" )
 	table={}
 	#loop AAs
 	for AA in CodonUsage.SynonymousCodons:
+		if args.verbose >= 2: print( AA )
 		temp_table={}
 		#calculate total usage of codon in input
 		tot_usage=0
@@ -218,9 +220,11 @@ def compare_profiles( input, host ):
 		#calculate ideal usage of codon in host
 		tot_ideal=0
 		for syn_codon in CodonUsage.SynonymousCodons[ AA ]:
-			ideal_usage = int( round( host[ syn_codon ][1] * tot_usage, 0 ) )
+			ideal_usage_abs = int( round( host[ syn_codon ][1] * tot_usage, 0 ) )
+			ideal_usage = int( round( host[ syn_codon ][1] * relax * tot_usage, 0 ) )
+			if args.verbose >= 2: print( "{0}: {1}".format(syn_codon,ideal_usage) )
 			tot_ideal += ideal_usage
-			temp_table[ syn_codon ] = { 'input_count': input[ syn_codon ][0], 'input_perc': input[ syn_codon ][1], 'ideal_usage': ideal_usage, 'host_perc': float( host[ syn_codon ][1] ) }
+			temp_table[ syn_codon ] = { 'input_count': input[ syn_codon ][0], 'input_perc': input[ syn_codon ][1], 'ideal_usage_abs': ideal_usage_abs,'ideal_usage': ideal_usage, 'host_perc': float( host[ syn_codon ][1] ) }
 		
 		#if ideal number is too high, subtract from lowest host codon (that is not 0 already )
 		while tot_ideal > tot_usage:
@@ -245,17 +249,17 @@ def compare_profiles( input, host ):
 							
 		#populate return table
 		for syn_codon in CodonUsage.SynonymousCodons[ AA ]:
-			table[ syn_codon ] = { 'input_count': temp_table[ syn_codon ]['input_count'], 'ideal_usage': temp_table[ syn_codon ]['ideal_usage'], 'difference': temp_table[ syn_codon ]['input_count'] - temp_table[ syn_codon ]['ideal_usage'] }
+			table[ syn_codon ] = { 'input_count': temp_table[ syn_codon ]['input_count'], 'ideal_usage_abs': temp_table[ syn_codon ]['ideal_usage_abs'], 'difference': temp_table[ syn_codon ]['input_count'] - temp_table[ syn_codon ]['ideal_usage'], 'difference_abs': temp_table[ syn_codon ]['input_count'] - temp_table[ syn_codon ]['ideal_usage_abs']}
 
 	#calculate difference value
 	resi_total=0
 	diff_total=0
 	for AA in CodonUsage.SynonymousCodons:
 		for syn_codon in CodonUsage.SynonymousCodons[ AA ]:
-			resi_total += table[ syn_codon ]['ideal_usage']
-			diff_total += abs( table[ syn_codon ]['difference'] )
-	if args.verbose >= 1: print( 'CURRENT DIFFERNCE TOTAL: {0} of {1}'.format( int( diff_total/2 ), resi_total ) )
-	if args.verbose >= 1: print( 'CURRENT DIFFERNCE %: {0}'.format( diff_total/resi_total/2 ) )		
+			resi_total += table[ syn_codon ]['ideal_usage_abs']
+			diff_total += abs( table[ syn_codon ]['difference_abs'] )
+	if args.verbose >= 1: print( 'CURRENT DIFFERENCE TOTAL: {0} of {1}'.format( int( diff_total/2 ), resi_total ) )
+	if args.verbose >= 1: print( 'CURRENT DIFFERENCE %: {0}'.format( diff_total/resi_total/2 ) )		
 	diff = diff_total/resi_total/2
 	
 	return table, diff
@@ -632,19 +636,24 @@ for count, seq in enumerate( sequences ):
 	
 	if args.verbose >= 2: dump_sequence( input_dna )
 	
-	#run optimization
-	cycles_current=0
-	
 	#count codons and current profile
 	count_table = count_codons( input_dna )
 	input_profile = calc_profile( count_table )
 	
 	#compare input and host profiles
-	mutation_table, diff = compare_profiles( input_profile, host_profile )
+	mutation_table, diff = compare_profiles( input_profile, host_profile, 1 )
+
+	#run optimization
 	difference=1
+	cycles_current=0
+	relax = 1	
 	
-	while ( ( cycles_current < args.cycles ) or ( args.cycles == 0 ) ) and ( difference != 0 ):
+	#keep running while there are cycles AND difference between current and host is less than the % relax allowed
+	while ( ( cycles_current < args.cycles ) or ( args.cycles == 0 ) ) and ( difference >= ( relax - 1 ) ):
 		if args.verbose >= 1: print( "~~~~~~~~~~ Current cycle: {0}/{1} ~~~~~~~~~~".format( cycles_current+1, args.cycles ) )
+		#determine how much to relax harmonization
+		relax = 1+( args.max_relax * ( ( cycles_current ) / args.cycles ) )		
+		if args.verbose >=1: print( "Relax coeff: {0}".format( relax ) )
 		
 		#mutate residues to match host profile
 		input_dna = optimize_sequence( input_dna, mutation_table )
@@ -668,7 +677,7 @@ for count, seq in enumerate( sequences ):
 		input_profile = calc_profile( count_table )
 		
 		#compare input and host profiles
-		mutation_table, diff = compare_profiles( input_profile, host_profile )
+		mutation_table, diff = compare_profiles( input_profile, host_profile, relax )
 		difference=diff
 			
 		#tick cycle
