@@ -658,9 +658,10 @@ for count, seq in enumerate( sequences ):
 		#mutate residues to match host profile
 		input_dna = optimize_sequence( input_dna, mutation_table )
 		#check GC content in window
-		gc_scan( input_dna, 50, 0.15, 0.80 )
-		gc_scan( input_dna, 100, 0.25, 0.75 )
-		gc_scan( input_dna, len( input_dna )*3, 0.3, 0.65 )
+		gc_scan( input_dna, 20, 0.15, 0.90 )	#IDT values
+		gc_scan( input_dna, 50, 0.15, 0.80 )	#twist values
+		gc_scan( input_dna, 100, 0.28, 0.76 )	#IDT values, but close to twist values (100, 0.25, 0.75)
+		gc_scan( input_dna, len( input_dna )*3, 0.3, 0.65 )	#twist values
 		#check for unwanted restriction sites
 		if len( restrict_sites ) != 0: remove_restriction_sites( input_dna, restrict_sites )
 		#check for alternative start sites
