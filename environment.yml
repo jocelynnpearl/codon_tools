@@ -1,0 +1,5 @@
+name: codon_tools
+dependencies:
+  - biopython
+  - ipykernel
+
