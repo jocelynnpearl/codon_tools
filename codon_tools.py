@@ -1,16 +1,17 @@
 #! /usr/bin/env python
-import sys
 import argparse
-import Bio
+import logging
+import os.path
 import random
 import re
-import os.path
+import sys
+
+import Bio
 from Bio import SeqIO
-from Bio.Seq import Seq
-from Bio.Data import CodonTable
 from Bio.Alphabet import IUPAC
-from Bio.SeqUtils import CodonUsage
-from Bio.SeqUtils import seq3
+from Bio.Data import CodonTable
+from Bio.Seq import Seq
+from Bio.SeqUtils import CodonUsage, seq3
 
 ##########################################################
 #
@@ -103,10 +104,37 @@ parser.add_argument(
 
 args = parser.parse_args()
 
+# add two custom logging levels
+logging.DETAIL = 15
+logging.addLevelName(logging.DETAIL, "DETAIL")
+
+
+def _detail(self, message, *args, **kws):
+    if self.isEnabledFor(logging.DETAIL):
+        # Yes, logger takes its '*args' as 'args'.
+        self._log(logging.DETAIL, message, args, **kws)
+
+
+logging.OUTPUT = 25
+logging.addLevelName(logging.OUTPUT, "OUTPUT")
+
+
+def _output(self, message, *args, **kws):
+    if self.isEnabledFor(logging.OUTPUT):
+        # Yes, logger takes its '*args' as 'args'.
+        self._log(logging.OUTPUT, message, args, **kws)
+
+
+logging.Logger.detail = _detail
+logging.Logger.output = _output
+
+log_levels = [logging.OUTPUT, logging.INFO, logging.DETAIL, logging.DEBUG]
+logging.basicConfig(level=log_levels[args.verbose])
+logger = logging.getLogger(__name__)
+
 # reverse translate AA seq to DNA seq
 def reverse_translate(input):
-    if args.verbose >= 1:
-        print("===== REVERSE TRANSLATING AA SEQUENCE =====")
+    logger.info("===== REVERSE TRANSLATING AA SEQUENCE =====")
     aa_list = list(input)
     trans = []
     x = 0
@@ -115,15 +143,14 @@ def reverse_translate(input):
         codon = CodonUsage.SynonymousCodons[str(seq3(aa_list[x])).upper()][0]
         trans.append([aa_list[x], codon, x + 1])
         x += 1
-    if args.verbose >= 3:
-        print(trans)
+
+    logger.debug(trans)
     return trans
 
 
 # translate and format DNA seq
 def translate_input(input):
-    if args.verbose >= 1:
-        print("===== TRANSLATING AA SEQUENCE =====")
+    logger.info("===== TRANSLATING AA SEQUENCE =====")
     input_triplet = store_triplets(input)
     # print( input_triplet )
     trans = []
@@ -139,8 +166,7 @@ def translate_input(input):
                 ]
             )
         x += 1
-    if args.verbose >= 3:
-        print(trans)
+    logger.debug(trans)
     return trans
 
 
@@ -157,8 +183,7 @@ def store_triplets(input):
 
 # returns dictionary, counts the number of times each codon is used
 def count_codons(input):
-    if args.verbose >= 1:
-        print("===== COUNTING CODONS =====")
+    logger.info("===== COUNTING CODONS =====")
     codon_list = []
     x = 0
     while x < len(input):
@@ -182,8 +207,7 @@ def count_codons(input):
 
 # returns dictionary, calculates the % usage of each AA's codons
 def calc_profile(input):
-    if args.verbose >= 1:
-        print("===== CALCULATING PROFILE =====")
+    logger.info("===== CALCULATING PROFILE =====")
     # loop through all amino acids
     for AA in CodonUsage.SynonymousCodons:
         # print( '== {0} =='.format( AA ) )
@@ -211,8 +235,7 @@ def calc_profile(input):
 
 # returns a calc_profile for a given host table
 def process_host_table():
-    if args.verbose >= 1:
-        print("===== PROCESSING HOST TABLE: {0} =====".format(args.host))
+    logger.info("===== PROCESSING HOST TABLE: {0} =====".format(args.host))
     table = {}
     dir = os.path.dirname(__file__)
     filename = os.path.join(
@@ -233,12 +256,13 @@ def process_host_table():
 
     calculated_table = calc_profile(table)
 
-    if args.verbose >= 2:
-        print("pre-threshold host table:")
+    # avoid iteration if the log level is disabled
+    if logger.isEnabledFor(logging.DETAIL):
+        logger.detail("pre-threshold host table:")
         for AA in CodonUsage.SynonymousCodons:
-            print("== {0} ==".format(AA))
+            logger.detail("== {0} ==".format(AA))
             for syn_codon in CodonUsage.SynonymousCodons[AA]:
-                print(
+                logger.detail(
                     "{0}: {1}, {2}".format(
                         syn_codon,
                         calculated_table[syn_codon][0],
@@ -247,8 +271,7 @@ def process_host_table():
                 )
                 # print(calculated_table)
 
-    if args.verbose >= 1:
-        print("HOST THRESHOLD SET TO: {0}".format(args.host_threshold))
+    logger.info("HOST THRESHOLD SET TO: {0}".format(args.host_threshold))
     for AA in CodonUsage.SynonymousCodons:
         for syn_codon in CodonUsage.SynonymousCodons[AA]:
             if calculated_table[syn_codon][1] < args.host_threshold:
@@ -257,12 +280,12 @@ def process_host_table():
                 # recalculate profile after threshold applied
     calculated_table = calc_profile(calculated_table)
 
-    if args.verbose >= 2:
-        print("post-threshold host table:")
+    if logger.isEnabledFor(logging.DETAIL):
+        logger.detail("post-threshold host table:")
         for AA in CodonUsage.SynonymousCodons:
-            print("== {0} ==".format(AA))
+            logger.detail("== {0} ==".format(AA))
             for syn_codon in CodonUsage.SynonymousCodons[AA]:
-                print(
+                logger.detail(
                     "{0}: {1}, {2}".format(
                         syn_codon,
                         calculated_table[syn_codon][0],
@@ -283,13 +306,11 @@ def removekey(d, key):
 
 # returns dictionary of comparison between two profiles
 def compare_profiles(input, host, relax):
-    if args.verbose >= 1:
-        print("===== COMPARING PROFILES =====")
+    logger.info("===== COMPARING PROFILES =====")
     table = {}
     # loop AAs
     for AA in CodonUsage.SynonymousCodons:
-        if args.verbose >= 2:
-            print(AA)
+        logger.detail(AA)
         temp_table = {}
         # calculate total usage of codon in input
         tot_usage = 0
@@ -301,8 +322,7 @@ def compare_profiles(input, host, relax):
         for syn_codon in CodonUsage.SynonymousCodons[AA]:
             ideal_usage_abs = int(round(host[syn_codon][1] * tot_usage, 0))
             ideal_usage = int(round(host[syn_codon][1] * relax * tot_usage, 0))
-            if args.verbose >= 2:
-                print("{0}: {1}".format(syn_codon, ideal_usage))
+            logger.detail("{0}: {1}".format(syn_codon, ideal_usage))
             tot_ideal += ideal_usage
             temp_table[syn_codon] = {
                 "input_count": input[syn_codon][0],
@@ -361,14 +381,12 @@ def compare_profiles(input, host, relax):
         for syn_codon in CodonUsage.SynonymousCodons[AA]:
             resi_total += table[syn_codon]["ideal_usage_abs"]
             diff_total += abs(table[syn_codon]["difference_abs"])
-    if args.verbose >= 1:
-        print(
-            "CURRENT DIFFERENCE TOTAL: {0} of {1}".format(
-                int(diff_total / 2), resi_total
-            )
-        )
-    if args.verbose >= 1:
-        print("CURRENT DIFFERENCE %: {0}".format(diff_total / resi_total / 2))
+
+    logger.info(
+        "CURRENT DIFFERENCE TOTAL: {0} of {1}".format(int(diff_total / 2), resi_total)
+    )
+
+    logger.info("CURRENT DIFFERENCE %: {0}".format(diff_total / resi_total / 2))
     diff = diff_total / resi_total / 2
 
     return table, diff
@@ -376,8 +394,7 @@ def compare_profiles(input, host, relax):
 
 # returns mutated sequence after given a difference profile
 def optimize_sequence(input, mutation_profile):
-    if args.verbose >= 1:
-        print("===== OPTIMIZING SEQENCE =====")
+    logger.info("===== OPTIMIZING SEQENCE =====")
     random.seed()
     for AA in CodonUsage.SynonymousCodons:
         # figure out the index of codons in input sequence
@@ -455,8 +472,7 @@ def optimize_sequence(input, mutation_profile):
 
 # check for local homopolymers
 def remove_local_homopolymers(input):
-    if args.verbose >= 1:
-        print("===== REMOVE LOCAL HOMOPOLYMERS =====")
+    logger.info("===== REMOVE LOCAL HOMOPOLYMERS =====")
     check = 0
     while check != 1:
         # look at each 6-mer
@@ -477,9 +493,8 @@ def remove_local_homopolymers(input):
                     counter += 1
 
                 if max_found > args.local_homopolymer_threshold:
-                    if args.verbose >= 2:
-                        print("position: {0}: {1}".format(x * 3, mer))
-                        print("{0}, count={1}".format(base, max_found))
+                    logger.detail("position: {0}: {1}".format(x * 3, mer))
+                    logger.detail("{0}, count={1}".format(base, max_found))
                     apply_mutation(input, x)
                     apply_mutation(input, x + 1)
                     check = 0
@@ -500,26 +515,22 @@ def parse_unwanted_site_file(path_to_file, type):
                 seq = line
                 seq = seq.replace("\n", "")
                 unwanted_sites.append([site_name, seq])
-    if args.verbose >= 1:
-        print(
-            "Total number of unwanted {1} sites: {0}".format(len(unwanted_sites), type)
-        )
-    if args.verbose >= 2:
-        print(unwanted_sites)
+    logger.info(
+        "Total number of unwanted {1} sites: {0}".format(len(unwanted_sites), type)
+    )
+    logger.detail(unwanted_sites)
     return unwanted_sites
 
 
 # check for unwanted restriction sites
 def remove_restriction_sites(input, restrict_sites):
-    if args.verbose >= 1:
-        print("===== REMOVE RESTRICTION SITES =====")
+    logger.info("===== REMOVE RESTRICTION SITES =====")
 
     # check each unwanted restriction site
     for site_pair in restrict_sites:
-        if args.verbose >= 1:
-            print(
-                "checking restriction site: {0}, {1}".format(site_pair[0], site_pair[1])
-            )
+        logger.info(
+            "checking restriction site: {0}, {1}".format(site_pair[0], site_pair[1])
+        )
 
         # create sequence in a single string
         seq = "".join(codon for innerlist in input for codon in innerlist[1])
@@ -545,36 +556,34 @@ def remove_restriction_sites(input, restrict_sites):
 
 # check for alternative start sites
 def remove_start_sites(input, start_sites, start_codon):
-    if args.verbose >= 1:
-        print("===== REMOVE START SITES: {0} =====".format(start_codon))
+    logger.info("===== REMOVE START SITES: {0} =====".format(start_codon))
 
     # create sequence in a single string
     seq = "".join(codon for innerlist in input for codon in innerlist[1])
     # find all start codon sites (xTG)
     find_start = [m.start() for m in re.finditer(start_codon, seq)]
     if len(find_start) == 0:
-        if args.verbose >= 1:
-            print("No start codon found in sequence")
+        logger.info("No start codon found in sequence")
         return input
     else:
-        if args.verbose >= 1:
-            print("Start codons found: {0}".format(len(find_start)))
+        logger.info("Start codons found: {0}".format(len(find_start)))
 
         # check each start site for RBS (18 base pairs upstream of each ATG, ignore 3 bp closest to ATG )
     for start_pos in find_start:
         rbs_start = start_pos - 18
         seq_frag = seq[rbs_start : start_pos - 3]
 
-        if args.verbose >= 2:
+        if logger.isEnabledFor(logging.DETAIL):
             seq_frag_with_start = seq[start_pos - 3 : start_pos + 3]
-            print("checking sequence: {0}.{1}".format(seq_frag, seq_frag_with_start))
+            logger.detail(
+                "checking sequence: {0}.{1}".format(seq_frag, seq_frag_with_start)
+            )
 
             # check each unwanted RBS in each potential fragment
         for site_pair in start_sites:
-            if args.verbose >= 2:
-                print(
-                    "checking start site: {0}, {1}".format(site_pair[0], site_pair[1])
-                )
+            logger.detail(
+                "checking start site: {0}, {1}".format(site_pair[0], site_pair[1])
+            )
             search = seq_frag.find(site_pair[1])
             # test search
             count = 0
@@ -606,12 +615,11 @@ def mutate_codon(codon_in):
     while (codon_in[1] == codon_out) and (num_codons != 1):
         codon_out = random.choice(CodonUsage.SynonymousCodons[AA])
 
-    if args.verbose >= 2:
-        print(
-            "mutating [{0}] codon at position {3} from {1} to {2}".format(
-                AA, codon_in[1], codon_out, codon_in[2]
-            )
+    logger.detail(
+        "mutating [{0}] codon at position {3} from {1} to {2}".format(
+            AA, codon_in[1], codon_out, codon_in[2]
         )
+    )
     return codon_out
 
 
@@ -639,30 +647,23 @@ def apply_mutation(input, position, old_codon=[]):
 
 # dumps name of sequence
 def dump_name(input):
-    if args.verbose >= 1:
-        print("===== SEQUENCE NAME =====")
-    print("{0}".format(sequences[count][0]), end=" ")
-    if args.verbose >= 1:
-        print("")
+    logger.info("===== SEQUENCE NAME =====")
+    logger.info("{0}".format(sequences[count][0]))
 
 
 # dumps string from triplet sequence
 def dump_sequence(input):
-    if args.verbose >= 1:
-        print("===== DUMPING SEQUENCE =====")
-    for x in range(0, len(input)):
-        print(input[x][1], end="")
-    print()
+    logger.info("===== DUMPING SEQUENCE =====")
+    logger.output("".join([seq[1] for seq in input]))
 
 
 # check GC content
 def gc_scan(input, abs_window, low, high):
-    if args.verbose >= 1:
-        print(
-            "===== GC CONTENT SCAN IN WINDOW: {0} bps, threshold: {1} < x < {2}=====".format(
-                abs_window, low, high
-            )
+    logger.info(
+        "===== GC CONTENT SCAN IN WINDOW: {0} bps, threshold: {1} < x < {2}=====".format(
+            abs_window, low, high
         )
+    )
     random.seed()
 
     # splice sequence into overlapping chunks
@@ -673,8 +674,7 @@ def gc_scan(input, abs_window, low, high):
     ]  # this is somehow a reference to "input"?
     for segment in splices:
         gc_percent = gc_content(segment)
-        if args.verbose >= 3:
-            print("Current segment: {0}".format(segment))
+        logger.debug("Current segment: {0}".format(segment))
         count = 0
         old_codon = []
         # check gc_percent of current segment
@@ -684,8 +684,7 @@ def gc_scan(input, abs_window, low, high):
             gc_percent_new = gc_content(segment)
             if gc_percent_new >= gc_percent:
                 segment[position][1] = old_codon[0]
-                if args.verbose >= 3:
-                    print("reverting position: {0}".format(segment[position]))
+                logger.debug("reverting position: {0}".format(segment[position]))
             else:
                 gc_percent = gc_percent_new
                 # have a counter so it doesn't get infinite looped. (= 2x segment length)
@@ -701,15 +700,13 @@ def gc_content(input):
     seq = "".join(codon for innerlist in input for codon in innerlist[1])
     g_count = seq.count("G")
     c_count = seq.count("C")
-    if args.verbose >= 1:
-        print((g_count + c_count) / len(seq))
+    logger.info((g_count + c_count) / len(seq))
     return (g_count + c_count) / len(seq)
 
 
 # check for repeat segments
 def repeat_scan(input, frag_size):
-    if args.verbose >= 1:
-        print("===== REPEAT FRAGMENT SCAN FOR SIZE: {0} bps =====".format(frag_size))
+    logger.info("===== REPEAT FRAGMENT SCAN FOR SIZE: {0} bps =====".format(frag_size))
     random.seed()
 
     # determine window and overlap size
@@ -732,11 +729,9 @@ def repeat_scan(input, frag_size):
         for segment in splices:
             # check if it's 3 consecutive same codons
             if segment[0][1] == segment[1][1] and segment[1][1] == segment[2][1]:
-                if args.verbose >= 2:
-                    print("first 3 codons are identical: {0}".format(segment))
+                logger.detail("first 3 codons are identical: {0}".format(segment))
                 num_mut = random.randint(1, 2)
-                if args.verbose >= 3:
-                    print("roll dice, mutate {0} codons".format(num_mut))
+                logger.debug("roll dice, mutate {0} codons".format(num_mut))
                 for f in range(0, num_mut):
                     position = random.randint(0, num_mut - 1)
                     apply_mutation(segment, position)
@@ -746,11 +741,9 @@ def repeat_scan(input, frag_size):
             target = "".join(codon for innerlist in segment for codon in innerlist[1])
             seq = seq.replace(target, dummy, 1)
             if seq.find(target) != -1:
-                if args.verbose >= 2:
-                    print("Repeat fragment found with segment: {0}".format(segment))
+                logger.detail("Repeat fragment found with segment: {0}".format(segment))
                 num_mut = random.randint(1, (frag_size / 3) - 1)
-                if args.verbose >= 3:
-                    print("roll dice, mutate {0} codons".format(num_mut))
+                logger.debug("roll dice, mutate {0} codons".format(num_mut))
                 for f in range(0, num_mut):
                     position = random.randint(0, (frag_size / 3) - 1)
                     apply_mutation(segment, position)
@@ -765,8 +758,7 @@ def repeat_scan(input, frag_size):
 #
 ##########################################################
 
-if args.verbose >= 1:
-    print("===== SCRIPT START =====")
+logger.info("===== SCRIPT START =====")
 
 # read the input sequence file and parse lines
 sequences = []
@@ -779,10 +771,9 @@ with open(args.input, "r") as input_file:
             seq = line
             seq = seq.replace("\n", "")
             sequences.append([seq_name, seq])
-if args.verbose >= 1:
-    print("Total number of sequences: {0}".format(len(sequences)))
-if args.verbose >= 2:
-    print(sequences)
+
+logger.info("Total number of sequences: {0}".format(len(sequences)))
+logger.detail(sequences)
 
 # generate host profile
 host_profile = process_host_table()
@@ -803,24 +794,19 @@ else:
 for count, seq in enumerate(sequences):
     input_seq = sequences[count][1]
 
-    if args.verbose >= 1:
-        print(
-            "===== PROCESSING SEQUENCE {0} ===== {1}".format(
-                count + 1, sequences[count][0]
-            )
-        )
+    logger.info(
+        "===== PROCESSING SEQUENCE {0} ===== {1}".format(count + 1, sequences[count][0])
+    )
 
     # check input seq style
     if args.type == "AA":
-        if args.verbose >= 1:
-            print("INPUT IS AA SEQUENCE")
+        logger.info("INPUT IS AA SEQUENCE")
         input_dna = reverse_translate(input_seq)
     elif args.type == "DNA":
-        if args.verbose >= 1:
-            print("INPUT IS DNA SEQUENCE")
+        logger.info("INPUT IS DNA SEQUENCE")
         input_dna = translate_input(input_seq)
 
-    if args.verbose >= 2:
+    if logger.isEnabledFor(logging.DETAIL):
         dump_sequence(input_dna)
 
     # count codons and current profile
@@ -839,16 +825,14 @@ for count, seq in enumerate(sequences):
     while ((cycles_current < args.cycles) or (args.cycles == 0)) and (
         difference >= (relax - 1)
     ):
-        if args.verbose >= 1:
-            print(
-                "~~~~~~~~~~ Current cycle: {0}/{1} ~~~~~~~~~~".format(
-                    cycles_current + 1, args.cycles
-                )
+        logger.info(
+            "~~~~~~~~~~ Current cycle: {0}/{1} ~~~~~~~~~~".format(
+                cycles_current + 1, args.cycles
             )
+        )
         # determine how much to relax harmonization
         relax = 1 + (args.max_relax * ((cycles_current) / args.cycles))
-        if args.verbose >= 1:
-            print("Relax coeff: {0}".format(relax))
+        logger.info("Relax coeff: {0}".format(relax))
 
         # mutate residues to match host profile
         input_dna = optimize_sequence(input_dna, mutation_table)
@@ -887,20 +871,17 @@ for count, seq in enumerate(sequences):
 
         # hit the max number of cycles?
     if cycles_current == args.cycles:
-        if args.verbose >= 1:
-            print("You hit the max number of cycles: {0}".format(args.cycles))
+        logger.info("You hit the max number of cycles: {0}".format(args.cycles))
 
-        # check GC content
-    if args.verbose >= 1:
-        print("===== GC CONTENT =====")
+    # check GC content
+    logger.info("===== GC CONTENT =====")
     gc_percent = round(gc_content(input_dna), 3)
     if gc_percent < 0.3 or gc_percent > 0.65:
-        print("WARNING: total GC content is {0}!".format(gc_percent))
+        logger.warning("total GC content is {0}!".format(gc_percent))
 
     # dump result name and sequence
     dump_name(input_dna)
     # dumps a decimal of final difference (0.00 is ideal)
-    if args.verbose <= 0:
-        print("({0})".format(round(difference, 2)), end=" ")
+    logger.output("({0})".format(round(difference, 2)))
     dump_sequence(input_dna)
 # end
