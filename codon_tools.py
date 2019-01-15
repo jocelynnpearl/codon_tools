@@ -1,6 +1,5 @@
 #! /usr/bin/env python
 import argparse
-import logging
 import os.path
 import random
 import re
@@ -10,8 +9,11 @@ import Bio
 from Bio import SeqIO
 from Bio.Alphabet import IUPAC
 from Bio.Data import CodonTable
-from Bio.Seq import Seq
-from Bio.SeqUtils import CodonUsage, seq3
+from Bio.Restriction import Analysis
+from Bio.SeqUtils import CodonUsage, GC, seq3
+
+from codon_tools.util import Seq, MutableSeq, logging, log_levels
+from codon_tools.data import GC_content, RestrictionEnz, RibosomeBindingSites
 
 ##########################################################
 #
@@ -54,15 +56,7 @@ parser = argparse.ArgumentParser(
     description="Optimize your AA or DNA sequence to harmonize with a host's condon usage.",
     epilog="2017-12-04, v0.47 (contact yhsia@uw.edu if stuff does not work)",
 )
-
 parser.add_argument("--input", type=str, required=True, help="input file with sequence")
-parser.add_argument(
-    "--type",
-    type=str,
-    default="AA",
-    choices=["AA", "DNA"],
-    help="is your input AA or DNA?",
-)
 parser.add_argument(
     "--host",
     type=str,
@@ -75,7 +69,6 @@ parser.add_argument(
     default="0.10",
     help="lowest codon fraction per AA in the host that is allowed",
 )
-# parser.add_argument('--n_terminal_rares', type=bool, default='true', help='optimize the first 11 AAs
 parser.add_argument(
     "--verbose",
     type=int,
@@ -104,256 +97,161 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-# add two custom logging levels
-logging.DETAIL = 15
-logging.addLevelName(logging.DETAIL, "DETAIL")
 
-
-def _detail(self, message, *args, **kws):
-    if self.isEnabledFor(logging.DETAIL):
-        # Yes, logger takes its '*args' as 'args'.
-        self._log(logging.DETAIL, message, args, **kws)
-
-
-logging.OUTPUT = 25
-logging.addLevelName(logging.OUTPUT, "OUTPUT")
-
-
-def _output(self, message, *args, **kws):
-    if self.isEnabledFor(logging.OUTPUT):
-        # Yes, logger takes its '*args' as 'args'.
-        self._log(logging.OUTPUT, message, args, **kws)
-
-
-logging.Logger.detail = _detail
-logging.Logger.output = _output
-
-log_levels = [logging.OUTPUT, logging.INFO, logging.DETAIL, logging.DEBUG]
 logging.basicConfig(level=log_levels[args.verbose])
 logger = logging.getLogger(__name__)
-
-# reverse translate AA seq to DNA seq
-def reverse_translate(input):
-    logger.info("===== REVERSE TRANSLATING AA SEQUENCE =====")
-    aa_list = list(input)
-    trans = []
-    x = 0
-    while x < len(input):
-        # print( aa_list[ x ] )
-        codon = CodonUsage.SynonymousCodons[str(seq3(aa_list[x])).upper()][0]
-        trans.append([aa_list[x], codon, x + 1])
-        x += 1
-
-    logger.debug(trans)
-    return trans
-
-
-# translate and format DNA seq
-def translate_input(input):
-    logger.info("===== TRANSLATING AA SEQUENCE =====")
-    input_triplet = store_triplets(input)
-    # print( input_triplet )
-    trans = []
-    x = 0
-    while x < (len(input) / 3):
-        # print( str(Seq( input_triplet[x], IUPAC.unambiguous_dna ).translate) )
-        if len(input_triplet[x]) == 3:
-            trans.append(
-                [
-                    str(Seq(input_triplet[x], IUPAC.unambiguous_dna).translate()),
-                    input_triplet[x],
-                    x + 1,
-                ]
-            )
-        x += 1
-    logger.debug(trans)
-    return trans
-
-
-# returns list, splits an input dna sequence into a list of triplet codons
-def store_triplets(input):
-    list = []
-    # make sure input DNA is divisible by 3
-    assert len(input) % 3 == 0, "Input DNA is not divisible by 3!"
-
-    for start in range(0, len(input), 3):
-        list.append(input[start : start + 3])
-    return list
+random.seed()
 
 
 # returns dictionary, counts the number of times each codon is used
-def count_codons(input):
+def count_codons(dna_sequence):
     logger.info("===== COUNTING CODONS =====")
-    codon_list = []
-    x = 0
-    while x < len(input):
-        codon_list.append(input[x][1])
-        x += 1
 
-    table = {}
-    for base1 in ["T", "C", "A", "G"]:
-        for base2 in ["T", "C", "A", "G"]:
-            for base3 in ["T", "C", "A", "G"]:
-                codon_count = codon_list.count("{0}{1}{2}".format(base1, base2, base3))
-                # print( codon_count )
-                # codon_fraction=codon_count/len( input )
-                # print( codon_fraction )
-                # table.append( {'{0}{1}{2}'.format( base1, base2, base3 ): codon_count} )
-                table["{0}{1}{2}".format(base1, base2, base3)] = [codon_count, 0]
-                # table.append( [codon_count, codon_fraction] )
-                # print( table[-1] )
-    return table
+    codons_dict = CodonUsage.CodonsDict.copy()
+    for codon in dna_sequence.codons():
+        codons_dict[codon] += 1
+
+    return codons_dict
 
 
 # returns dictionary, calculates the % usage of each AA's codons
-def calc_profile(input):
+def calc_profile(codons_count):
     logger.info("===== CALCULATING PROFILE =====")
+    codons_freq = CodonUsage.CodonsDict.copy()
+
     # loop through all amino acids
-    for AA in CodonUsage.SynonymousCodons:
-        # print( '== {0} =='.format( AA ) )
-        # print( len( CodonUsage.SynonymousCodons[ AA ] ) )
+    for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
+        # add up number of times each AA appears
+        tot_usage = sum([codons_count[codon] for codon in synonymous_codons])
 
-        # add up number of times each AA(total codons) is used
-        tot_usage = 0
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            tot_usage += input[syn_codon][0]
-            # print( tot_usage )
-
-            # calculate how the fraction of times each codon is used per AA
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            usage = 0
-            if tot_usage == 0:
-                usage = 0
-            else:
-                usage = input[syn_codon][0] / tot_usage
-                # input.setdefault( syn_codon, [] )
-            input[syn_codon][1] = usage
-
-            # print( input )
-    return input
+        # calculate the distribution of synonymous codon use
+        if tot_usage == 0:
+            continue
+        codons_freq.update(
+            {codon: codons_count[codon] / tot_usage for codon in synonymous_codons}
+        )
+    return codons_freq
 
 
 # returns a calc_profile for a given host table
 def process_host_table():
     logger.info("===== PROCESSING HOST TABLE: {0} =====".format(args.host))
-    table = {}
-    dir = os.path.dirname(__file__)
+    table = CodonUsage.CodonsDict.copy()
+
+    dirname = os.path.dirname(__file__)
     filename = os.path.join(
-        dir, "template_files/codon_tables/{0}.txt".format(args.host)
+        dirname, "template_files/codon_tables/{0}.txt".format(args.host)
     )
     with open(filename, "r") as inputfile:
         for line in inputfile:
-            tok = line.split()
-            if tok[0] == "\0":
+            codon, _, count = line.split()
+
+            if codon == "\0":
                 continue
-            codon_rna = Seq(tok[0])
-            codon_dna = codon_rna.back_transcribe()
-            table["{0}{1}{2}".format(codon_dna[0], codon_dna[1], codon_dna[2])] = [
-                int(tok[2]),
-                0,
-            ]
-            # print( table )
+            # codons are stored with RNA alphabet
+            table[str(Seq(codon).back_transcribe())] = int(count)
 
     calculated_table = calc_profile(table)
 
     # avoid iteration if the log level is disabled
     if logger.isEnabledFor(logging.DETAIL):
         logger.detail("pre-threshold host table:")
-        for AA in CodonUsage.SynonymousCodons:
+        for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
             logger.detail("== {0} ==".format(AA))
-            for syn_codon in CodonUsage.SynonymousCodons[AA]:
+            for codon in synonymous_codons:
                 logger.detail(
-                    "{0}: {1}, {2}".format(
-                        syn_codon,
-                        calculated_table[syn_codon][0],
-                        calculated_table[syn_codon][1],
-                    )
+                    "{0}: {1}, {2}".format(codon, table[codon], calculated_table[codon])
                 )
-                # print(calculated_table)
 
     logger.info("HOST THRESHOLD SET TO: {0}".format(args.host_threshold))
-    for AA in CodonUsage.SynonymousCodons:
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            if calculated_table[syn_codon][1] < args.host_threshold:
-                calculated_table[syn_codon][0] = 0
+    for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
+        for codon in synonymous_codons:
+            if calculated_table[codon] < args.host_threshold:
+                table[codon] = 0
 
-                # recalculate profile after threshold applied
-    calculated_table = calc_profile(calculated_table)
+    # recalculate profile after threshold applied
+    calculated_table = calc_profile(table)
 
     if logger.isEnabledFor(logging.DETAIL):
         logger.detail("post-threshold host table:")
-        for AA in CodonUsage.SynonymousCodons:
+        for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
             logger.detail("== {0} ==".format(AA))
-            for syn_codon in CodonUsage.SynonymousCodons[AA]:
+            for codon in synonymous_codons:
                 logger.detail(
-                    "{0}: {1}, {2}".format(
-                        syn_codon,
-                        calculated_table[syn_codon][0],
-                        calculated_table[syn_codon][1],
-                    )
+                    "{0}: {1}, {2}".format(codon, table[codon], calculated_table[codon])
                 )
-                # print(calculated_table)
-
     return calculated_table
 
 
-# returns dictionary after a key gets removed (this is for reference issues).
-def removekey(d, key):
-    r = dict(d)
-    del r[key]
-    return r
+def host_codon_usage(host=args.host):
+    logger.info("===== PROCESSING HOST TABLE: {0} =====".format(host))
+    host_profile = CodonUsage.CodonsDict.copy()
+
+    dirname = os.path.dirname(__file__)
+    filename = os.path.join(dirname, "template_files/codon_tables/{0}.txt".format(host))
+    with open(filename, "r") as inputfile:
+        for line in inputfile:
+            codon, frequency_per_1000, _ = line.split()
+
+            if codon == "\0":
+                continue
+            # codons are stored with RNA alphabet
+            host_profile[str(Seq(codon).back_transcribe())] = (
+                float(frequency_per_1000) * 10
+            )
+
+    codon_use_by_aa = {}
+    for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
+        codon_use_by_aa[AA] = [
+            synonymous_codons,
+            [host_profile[codon] for codon in synonymous_codons],
+        ]
+    return codon_use_by_aa
 
 
 # returns dictionary of comparison between two profiles
-def compare_profiles(input, host, relax):
+def compare_profiles(codons_count, host, relax):
     logger.info("===== COMPARING PROFILES =====")
     table = {}
     # loop AAs
-    for AA in CodonUsage.SynonymousCodons:
+    for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
         logger.detail(AA)
         temp_table = {}
-        # calculate total usage of codon in input
-        tot_usage = 0
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            tot_usage += input[syn_codon][0]
 
-            # calculate ideal usage of codon in host
+        # calculate total usage of codon in input
+        tot_usage = sum([codons_count[codon] for codon in synonymous_codons])
+
+        # calculate ideal usage of codon in host
         tot_ideal = 0
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            ideal_usage_abs = int(round(host[syn_codon][1] * tot_usage, 0))
-            ideal_usage = int(round(host[syn_codon][1] * relax * tot_usage, 0))
-            logger.detail("{0}: {1}".format(syn_codon, ideal_usage))
+        for codon in synonymous_codons:
+            ideal_usage_abs = int(round(host[codon] * tot_usage, 0))
+            ideal_usage = int(round(host[codon] * relax * tot_usage, 0))
+            logger.detail("{0}: {1}".format(codon, ideal_usage))
             tot_ideal += ideal_usage
-            temp_table[syn_codon] = {
-                "input_count": input[syn_codon][0],
-                "input_perc": input[syn_codon][1],
+            temp_table[codon] = {
+                "input_count": codons_count[codon],
+                "input_perc": codons_count[codon],
                 "ideal_usage_abs": ideal_usage_abs,
                 "ideal_usage": ideal_usage,
-                "host_perc": float(host[syn_codon][1]),
+                "host_perc": float(host[codon]),
             }
 
-            # if ideal number is too high, subtract from lowest host codon (that is not 0 already )
+        # if ideal number is too high, subtract from lowest host codon (that is not 0 already )
         while tot_ideal > tot_usage:
             lowest_table = temp_table
-            # print( lowest_table )
             lowest_codon = min(
                 temp_table, key=lambda k: float(temp_table[k]["host_perc"])
             )
             while temp_table[lowest_codon]["ideal_usage"] == 0:
-                # print( lowest_table )
                 lowest_table = removekey(lowest_table, lowest_codon)
-                # print( lowest_codon )
                 lowest_codon = min(
                     lowest_table, key=lambda k: float(lowest_table[k]["host_perc"])
                 )
-                # print( lowest_codon )
-            temp_table[lowest_codon]["ideal_usage"] = (
-                temp_table[lowest_codon]["ideal_usage"] - 1
-            )
-            # print( temp_table[ lowest_codon ]['ideal_usage'] )
+
+            temp_table[lowest_codon]["ideal_usage"] -= 1
             tot_ideal -= 1
 
-            # if ideal number is too low, add to highest host codon
+        # if ideal number is too low, add to highest host codon
         while tot_ideal < tot_usage:
             highest_codon = max(
                 temp_table, key=lambda k: float(temp_table[k]["host_perc"])
@@ -363,24 +261,24 @@ def compare_profiles(input, host, relax):
             )
             tot_ideal += 1
 
-            # populate return table
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            table[syn_codon] = {
-                "input_count": temp_table[syn_codon]["input_count"],
-                "ideal_usage_abs": temp_table[syn_codon]["ideal_usage_abs"],
-                "difference": temp_table[syn_codon]["input_count"]
-                - temp_table[syn_codon]["ideal_usage"],
-                "difference_abs": temp_table[syn_codon]["input_count"]
-                - temp_table[syn_codon]["ideal_usage_abs"],
+        # populate return table
+        for codon in synonymous_codons:
+            table[codon] = {
+                "input_count": temp_table[codon]["input_count"],
+                "ideal_usage_abs": temp_table[codon]["ideal_usage_abs"],
+                "difference": temp_table[codon]["input_count"]
+                - temp_table[codon]["ideal_usage"],
+                "difference_abs": temp_table[codon]["input_count"]
+                - temp_table[codon]["ideal_usage_abs"],
             }
 
-            # calculate difference value
+    # calculate difference value
     resi_total = 0
     diff_total = 0
-    for AA in CodonUsage.SynonymousCodons:
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            resi_total += table[syn_codon]["ideal_usage_abs"]
-            diff_total += abs(table[syn_codon]["difference_abs"])
+    for AA, synonymous_codons in CodonUsage.SynonymousCodons.items():
+        for codon in synonymous_codons:
+            resi_total += table[codon]["ideal_usage_abs"]
+            diff_total += abs(table[codon]["difference_abs"])
 
     logger.info(
         "CURRENT DIFFERENCE TOTAL: {0} of {1}".format(int(diff_total / 2), resi_total)
@@ -393,81 +291,24 @@ def compare_profiles(input, host, relax):
 
 
 # returns mutated sequence after given a difference profile
-def optimize_sequence(input, mutation_profile):
-    logger.info("===== OPTIMIZING SEQENCE =====")
-    random.seed()
-    for AA in CodonUsage.SynonymousCodons:
-        # figure out the index of codons in input sequence
-        mutation_table = {}
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            mutation_table[syn_codon] = {
-                "difference": mutation_profile[syn_codon]["difference"],
-                "pos": None,
-            }
-            # print( syn_codon )
-            pos_list = []
-            for pos, item in enumerate(input):
-                if item[1] == syn_codon:
-                    pos_list.append(pos)
-                    # print( pos_list )
-            mutation_table[syn_codon].update({"pos": pos_list})
+def resample_codons(dna_sequence, codon_use_by_aa):
+    """[summary]
 
-            # print( AA )
-            # print( mutation_table )
-            # check if this AA even needs to be optimized
-        tot_diff = 0
-        for syn_codon in CodonUsage.SynonymousCodons[AA]:
-            tot_diff += abs(mutation_table[syn_codon]["difference"])
+    Args:
+        dna_sequence ([type]): [description]
+        codon_use_by_aa ([type]): [description]
 
-        while tot_diff >= 1:
-            # pick random codon1 and codon2
+    Returns:
+        [type]: [description]
+    """
 
-            ##BLOCK HERE TO SKIP LOCKED CODONS
-
-            codon1 = random.choice(list(mutation_table.keys()))
-            while (
-                mutation_table[codon1]["difference"] == 0
-                or mutation_table[codon1]["difference"] < 0
-            ):
-                codon1 = random.choice(list(mutation_table.keys()))
-                # print( codon1 )
-            codon2 = codon1
-            # print( codon1 )
-
-            while (
-                codon1 == codon2
-                or mutation_table[codon2]["difference"] == 0
-                or mutation_table[codon2]["difference"] > 0
-            ):  # make sure codon2 is always receiving
-                codon2 = random.choice(list(mutation_table.keys()))
-                # print( codon2 )
-
-                # change codons positions
-                # print( AA)
-                # print( list( mutation_table[ codon1 ]['pos'] ) )
-            codon_pos = random.choice(list(mutation_table[codon1]["pos"]))
-            # print( codon_pos )
-            codon_pos_index = mutation_table[codon1]["pos"].index(codon_pos)
-            # delete from codon1
-            # print( mutation_table[ codon1 ][ 'pos' ] )
-            del mutation_table[codon1]["pos"][codon_pos_index]
-            mutation_table[codon1]["difference"] -= 1
-            # print( mutation_table[ codon1 ][ 'pos' ] )
-            # add to codon2
-            mutation_table[codon2]["pos"].append(codon_pos)
-            mutation_table[codon2]["difference"] += 1
-            # print( input[ codon_pos ][1] )
-            input[codon_pos][1] = codon2
-            # print( input[ codon_pos ][1] )
-            # print( mutation_table[ codon2 ][ 'pos' ] )
-
-            # update difference
-            tot_diff = 0
-            for syn_codon in CodonUsage.SynonymousCodons[AA]:
-                tot_diff += abs(mutation_table[syn_codon]["difference"])
-
-                # print( mutation_table ) #this should result in difference=0 for all
-    return input
+    resampled_dna = "".join(
+        [
+            random.choices(*codon_use_by_aa[seq3(AA).upper()]).pop()
+            for AA in dna_sequence.translate()
+        ]
+    )
+    return Seq(resampled_dna, IUPAC.unambiguous_dna)
 
 
 # check for local homopolymers
@@ -503,205 +344,173 @@ def remove_local_homopolymers(input):
     return input
 
 
-# parse unwanted sites file
-def parse_unwanted_site_file(path_to_file, type):
-    unwanted_sites = []
-    with open(path_to_file, "r") as sites_file:
-        for count, line in enumerate(sites_file):
-            if count % 2 == 0:
-                site_name = line
-                site_name = site_name.replace("\n", "")
-            else:
-                seq = line
-                seq = seq.replace("\n", "")
-                unwanted_sites.append([site_name, seq])
-    logger.info(
-        "Total number of unwanted {1} sites: {0}".format(len(unwanted_sites), type)
-    )
-    logger.detail(unwanted_sites)
-    return unwanted_sites
-
-
 # check for unwanted restriction sites
-def remove_restriction_sites(input, restrict_sites):
+def remove_restriction_sites(dna_sequence, restrict_sites):
     logger.info("===== REMOVE RESTRICTION SITES =====")
 
     # check each unwanted restriction site
-    for site_pair in restrict_sites:
-        logger.info(
-            "checking restriction site: {0}, {1}".format(site_pair[0], site_pair[1])
-        )
+    analysis = Analysis(restrictionbatch=restrict_sites, sequence=dna_sequence)
+    result = analysis.full()
 
-        # create sequence in a single string
-        seq = "".join(codon for innerlist in input for codon in innerlist[1])
-        # search for the restriction site in the sequence
-        search = seq.find(site_pair[1])
-        # test search
-        count = 0
-        while search != -1:
-            position = int(search / 3)
-            # mutate residues if site is found
-            apply_mutation(input, position)
-            apply_mutation(input, position + 1)
-            # reset sequence and search again
-            seq = "".join(codon for innerlist in input for codon in innerlist[1])
-            search = seq.find(site_pair[1])
+    mutable_seq = dna_sequence.tomutable()
+    for enz, cuts in result.items():
+        for cut in cuts:
+            logger.info(
+                "The restriction enzyme {0} can cut the sequence before position {1}!".format(
+                    str(enz), cuts
+                )
+            )
+            # map sequence position to codon position
+            # subtract 1 from `cut` to convert from sequence to string indexing
+            codon_pos, offset = divmod((cut - 1) - (enz.size // 2), 3)
+            # ensure the whole codon we mutate is being recognized
+            if offset:
+                codon_pos += 1
+            codon_idx = slice(codon_pos * 3, (codon_pos + 1) * 3)
 
-            # have a counter so it doesn't get infinite looped.
-            count += 1
-            if count >= 10:
-                break
-    return input
+            new_codon = mutate_codon(mutable_seq[codon_idx], codon_use_table)
+            mutable_seq[codon_idx] = new_codon
+
+    return mutable_seq.toseq()
 
 
 # check for alternative start sites
-def remove_start_sites(input, start_sites, start_codon):
-    logger.info("===== REMOVE START SITES: {0} =====".format(start_codon))
+def remove_start_sites(dna_sequence, ribosome_binding_sites, table_name="Standard"):
 
-    # create sequence in a single string
-    seq = "".join(codon for innerlist in input for codon in innerlist[1])
+    codon_table = CodonTable.unambiguous_dna_by_name[table_name]
+    logger.info(
+        "===== REMOVE START SITES: {0} =====".format(
+            ", ".join(codon_table.start_codons)
+        )
+    )
+
+    dna_sequence = Seq("ATGGCCATTGTAATGGGCCGCTG", IUPAC.unambiguous_dna)
     # find all start codon sites (xTG)
-    find_start = [m.start() for m in re.finditer(start_codon, seq)]
-    if len(find_start) == 0:
-        logger.info("No start codon found in sequence")
-        return input
-    else:
-        logger.info("Start codons found: {0}".format(len(find_start)))
+    start_codon_positions = [
+        m.start()
+        for start_codon in codon_table.start_codons
+        for m in re.finditer(start_codon, str(dna_sequence))
+    ]
 
-        # check each start site for RBS (18 base pairs upstream of each ATG, ignore 3 bp closest to ATG )
-    for start_pos in find_start:
-        rbs_start = start_pos - 18
-        seq_frag = seq[rbs_start : start_pos - 3]
+    if len(start_codon_positions) == 0:
+        logger.info("No start codons found in sequence")
+        return dna_sequence
+    else:
+        logger.info(
+            "Found {0} start codons. Checking for upstream RBSs...".format(
+                len(start_codon_positions)
+            )
+        )
+
+    # check each start site for RBS
+    # 18 base pairs upstream of each xTG, ignore 3 bp closest to xTG
+    rbs_positions = [pos - 18 for pos in start_codon_positions if pos >= 18]
+    mutable_seq = dna_sequence.tomutable()
+
+    for rbs_start in rbs_positions:
+        # ignore 3 bp closest to xTG
+        rbs_stop = rbs_start + 18 - 3
+        rbs_query_seq = mutable_seq[rbs_start:rbs_stop]
 
         if logger.isEnabledFor(logging.DETAIL):
-            seq_frag_with_start = seq[start_pos - 3 : start_pos + 3]
+            seq_frag_with_start = mutable_seq[rbs_stop : rbs_stop + 6]
             logger.detail(
-                "checking sequence: {0}.{1}".format(seq_frag, seq_frag_with_start)
+                "checking sequence: {0}.{1}".format(rbs_query_seq, seq_frag_with_start)
             )
 
-            # check each unwanted RBS in each potential fragment
-        for site_pair in start_sites:
-            logger.detail(
-                "checking start site: {0}, {1}".format(site_pair[0], site_pair[1])
-            )
-            search = seq_frag.find(site_pair[1])
+        # check each unwanted RBS in each potential fragment
+        for rbs, site in ribosome_binding_sites.items():
+            logger.detail("checking start site: {0}, {1}".format(rbs, site))
+            search = rbs_query_seq.find(site)
             # test search
             count = 0
             while search != -1:
-                position = int((search + rbs_start + 1) / 3)
+                position = (search + rbs_start + 1) // 3
+
                 # mutate residues if site is found
-                apply_mutation(input, position)
-                apply_mutation(input, position + 1)
+
+                apply_mutation(mutable_seq, position)
+                apply_mutation(mutable_seq, position + 1)
+
                 # reset sequence and search again
-                seq = "".join(codon for innerlist in input for codon in innerlist[1])
-                seq_frag = seq[rbs_start:start_pos]
-                search = seq_frag.find(site_pair[1])
+                seq_frag = mutable_seq[rbs_start : rbs_stop + 3]
+                search = seq_frag.find(site)
 
                 # have a counter so it doesn't get infinite looped.
                 count += 1
                 if count >= 10:
                     break
-    return input
+    return mutable_seq.toseq()
 
 
 # mutate single codon
-def mutate_codon(codon_in):
-    random.seed()
-    AA = str(seq3(str(Seq(codon_in[1], IUPAC.unambiguous_dna).translate()))).upper()
-    num_codons = len(CodonUsage.SynonymousCodons[AA])
+def mutate_codon(codon_in, codon_use_table):
+    AA = seq3(CodonTable.standard_dna_table.forward_table[str(codon_in)]).upper()
+
+    synonymous_codons, codon_use_freq = codon_use_table[AA]
+    if len(synonymous_codons) == 1:
+        return codon_in
 
     # pick new codon
-    codon_out = random.choice(CodonUsage.SynonymousCodons[AA])
-    while (codon_in[1] == codon_out) and (num_codons != 1):
-        codon_out = random.choice(CodonUsage.SynonymousCodons[AA])
+    codon_out = codon_in
+    while codon_in == codon_out:
+        codon_out = random.choices(synonymous_codons, codon_use_freq).pop()
 
     logger.detail(
-        "mutating [{0}] codon at position {3} from {1} to {2}".format(
-            AA, codon_in[1], codon_out, codon_in[2]
-        )
+        "mutating [{0}] codon from {1} to {2}".format(AA, codon_in[1], codon_out)
     )
     return codon_out
 
 
-# apply mutation to position x
-def apply_mutation(input, position, old_codon=[]):
-    old_codon.clear()
-    old_codon.append(input[position][1])
-    # print( old_codon )
-    new_codon = mutate_codon(input[position])
-    input[position][1] = new_codon
-    # print( input[ position ][1] )
-    return input, position, old_codon
-
-
-# sync mutation from template to mirror
-# def sync_mutations( template, mirror ):
-# 	print( "sync_mutations" )
-# 	for template_codon in template:
-# 		abs_posi = template_codon[2]
-# 		if template_codon[1] == mirror[ abs_posi - 1 ][1]:
-# 			print( "template: {0}".format( template_codon ) )
-# 			print( "mirror: {0}".format( mirror[ abs_posi - 1 ] ) )
-# 		#print( template_codon )
-# 	return template, mirror
-
-# dumps name of sequence
-def dump_name(input):
-    logger.info("===== SEQUENCE NAME =====")
-    logger.info("{0}".format(sequences[count][0]))
-
-
-# dumps string from triplet sequence
-def dump_sequence(input):
-    logger.info("===== DUMPING SEQUENCE =====")
-    logger.output("".join([seq[1] for seq in input]))
-
-
 # check GC content
-def gc_scan(input, abs_window, low, high):
+def gc_scan(dna_sequence, window_size, low, high):
     logger.info(
         "===== GC CONTENT SCAN IN WINDOW: {0} bps, threshold: {1} < x < {2}=====".format(
-            abs_window, low, high
+            window_size, low, high
         )
     )
-    random.seed()
 
-    # splice sequence into overlapping chunks
-    window = int(abs_window / 3)
-    overlap = int(window / 2)
-    splices = [
-        input[i : i + window] for i in range(0, len(input), window - overlap)
-    ]  # this is somehow a reference to "input"?
-    for segment in splices:
-        gc_percent = gc_content(segment)
-        logger.debug("Current segment: {0}".format(segment))
+    # some windows may be expressed as function of the sequence length
+    # for example, "x0.5"
+    if isinstance(window_size, str) and window_size.startswith("x"):
+        window_size = int(float(window_size[1:]) * len(dna_sequence))
+
+    # iterate across overlapping chunks of complete codons
+    codon_window = int(window_size / 3)
+    overlap = int(codon_window / 2)
+    mutable_seq = dna_sequence.tomutable()
+
+    # for seg_no, segment in enumerate(slidingWindow):
+    for i in range(0, len(mutable_seq), codon_window - overlap):
+        window = slice(
+            i,
+            i + codon_window
+            if i + codon_window < len(mutable_seq)
+            else len(mutable_seq),
+        )
+        logger.debug("Current segment: {0}".format(mutable_seq[window]))
+
         count = 0
-        old_codon = []
+        gc_percent = GC(mutable_seq[window]) / 100
+
         # check gc_percent of current segment
-        while gc_percent < low or gc_percent > high:
-            position = random.randint(0, len(segment) - 1)
-            apply_mutation(segment, position, old_codon)
-            gc_percent_new = gc_content(segment)
-            if gc_percent_new >= gc_percent:
-                segment[position][1] = old_codon[0]
-                logger.debug("reverting position: {0}".format(segment[position]))
-            else:
-                gc_percent = gc_percent_new
-                # have a counter so it doesn't get infinite looped. (= 2x segment length)
+        while (gc_percent < low or gc_percent > high) and count < codon_window * 2:
+            position = random.randrange(0, len(mutable_seq[window]), 3)
+            codon_idx = slice(i + position, i + position + 3)
+
+            init_codon = mutable_seq[codon_idx]
+            new_codon = mutate_codon(init_codon, codon_use_table)
+
+            if (GC(new_codon) < GC(init_codon) and gc_percent > high) or (
+                GC(new_codon) > GC(init_codon) and gc_percent < low
+            ):
+                mutable_seq[codon_idx] = new_codon
+                logger.debug("Mutating position: {0}".format(position))
+                gc_percent = GC(mutable_seq[window]) / 100
+
+            # prevent infinite loop
             count += 1
-            if count >= (len(segment) * 2):
-                break
-            # sync_mutations( segment, input ) #don't need this since "splices" references "input" somehow
-    return input
-
-
-# count GC content
-def gc_content(input):
-    seq = "".join(codon for innerlist in input for codon in innerlist[1])
-    g_count = seq.count("G")
-    c_count = seq.count("C")
-    logger.info((g_count + c_count) / len(seq))
-    return (g_count + c_count) / len(seq)
+    return mutable_seq.toseq()
 
 
 # check for repeat segments
@@ -761,60 +570,31 @@ def repeat_scan(input, frag_size):
 logger.info("===== SCRIPT START =====")
 
 # read the input sequence file and parse lines
-sequences = []
-with open(args.input, "r") as input_file:
-    for count, line in enumerate(input_file):
-        if count % 2 == 0:
-            seq_name = line
-            seq_name = seq_name.replace("\n", "")
-        else:
-            seq = line
-            seq = seq.replace("\n", "")
-            sequences.append([seq_name, seq])
+records = list(SeqIO.parse(args.input, "fasta", IUPAC.protein))
 
-logger.info("Total number of sequences: {0}".format(len(sequences)))
-logger.detail(sequences)
+logger.info("Total number of sequences: {0}".format(len(records)))
+[logger.detail(record) for record in records]
 
 # generate host profile
-host_profile = process_host_table()
-# parse data input files
-dir = os.path.dirname(__file__)
-filename = os.path.join(dir, "template_files/restriction_sites.txt".format(args.host))
-if os.path.exists(filename) == 1:
-    restrict_sites = parse_unwanted_site_file(filename, "restriction")
-else:
-    restrict_sites = []
-filename = os.path.join(dir, "template_files/start_sites.txt".format(args.host))
-if os.path.exists(filename) == 1:
-    start_sites = parse_unwanted_site_file(filename, "start")
-else:
-    start_sites = []
+codon_use_table = host_codon_usage(args.host)
 
 # process through all supplied sequences
-for count, seq in enumerate(sequences):
-    input_seq = sequences[count][1]
-
-    logger.info(
-        "===== PROCESSING SEQUENCE {0} ===== {1}".format(count + 1, sequences[count][0])
-    )
+for count, record in enumerate(records):
+    logger.info("===== PROCESSING SEQUENCE {0} ===== {1}".format(count + 1, record.id))
 
     # check input seq style
-    if args.type == "AA":
-        logger.info("INPUT IS AA SEQUENCE")
-        input_dna = reverse_translate(input_seq)
-    elif args.type == "DNA":
-        logger.info("INPUT IS DNA SEQUENCE")
-        input_dna = translate_input(input_seq)
+    logger.info("INPUT IS AA SEQUENCE")
+    input_dna = record.seq.back_translate()
 
-    if logger.isEnabledFor(logging.DETAIL):
-        dump_sequence(input_dna)
+    logger.detail("===== DUMPING SEQUENCE =====")
+    logger.detail("".join([seq[1] for seq in input]))
 
+    # TODO: compare input and host profiles
+    """
     # count codons and current profile
     count_table = count_codons(input_dna)
     input_profile = calc_profile(count_table)
-
-    # compare input and host profiles
-    mutation_table, diff = compare_profiles(input_profile, host_profile, 1)
+    """
 
     # run optimization
     difference = 1
@@ -834,25 +614,19 @@ for count, seq in enumerate(sequences):
         relax = 1 + (args.max_relax * ((cycles_current) / args.cycles))
         logger.info("Relax coeff: {0}".format(relax))
 
-        # mutate residues to match host profile
-        input_dna = optimize_sequence(input_dna, mutation_table)
+        # TODO: measure the deviation from the host profile
+        input_dna = resample_codons(input_dna, codon_use_table)
+
         # check GC content in window
-        gc_scan(input_dna, 20, 0.15, 0.90)  # IDT values
-        gc_scan(input_dna, 50, 0.15, 0.80)  # twist values
-        gc_scan(
-            input_dna, 100, 0.28, 0.76
-        )  # IDT values, but close to twist values (100, 0.25, 0.75)
-        gc_scan(input_dna, len(input_dna) * 3, 0.3, 0.65)  # twist values
+        for _, gc_content in GC_content.items():
+            gc_scan(input_dna, **gc_content)
+
         # check for unwanted restriction sites
-        if len(restrict_sites) != 0:
-            remove_restriction_sites(input_dna, restrict_sites)
+        remove_restriction_sites(input_dna, RestrictionEnz)
+
         # check for alternative start sites
-        if len(start_sites) != 0:
-            remove_start_sites(input_dna, start_sites, "ATG")
-        if len(start_sites) != 0:
-            remove_start_sites(input_dna, start_sites, "GTG")
-        if len(start_sites) != 0:
-            remove_start_sites(input_dna, start_sites, "TTG")
+        remove_start_sites(input_dna, RibosomeBindingSites, "Standard")
+
         # check for repeat fragments
         repeat_scan(input_dna, 9)
         # check for local homopolymers
@@ -863,8 +637,12 @@ for count, seq in enumerate(sequences):
         input_profile = calc_profile(count_table)
 
         # compare input and host profiles
-        mutation_table, diff = compare_profiles(input_profile, host_profile, relax)
-        difference = diff
+        # this should probably use the CAI metric
+        """
+        mutation_table, difference = compare_profiles(
+            input_profile, host_profile, relax
+        )
+        """
 
         # tick cycle
         cycles_current += 1
@@ -875,13 +653,15 @@ for count, seq in enumerate(sequences):
 
     # check GC content
     logger.info("===== GC CONTENT =====")
-    gc_percent = round(gc_content(input_dna), 3)
+    gc_percent = round(GC(input_dna) / 100, 3)
     if gc_percent < 0.3 or gc_percent > 0.65:
-        logger.warning("total GC content is {0}!".format(gc_percent))
+        logger.warning("Overall GC content is {0}!".format(gc_percent))
 
-    # dump result name and sequence
-    dump_name(input_dna)
-    # dumps a decimal of final difference (0.00 is ideal)
+    # display result name and sequence
+    logger.output("===== SEQUENCE NAME =====")
+    logger.output("{0}".format(record.id))
+
+    # display final codon-use difference between host and current sequence (0.00 is ideal)
     logger.output("({0})".format(round(difference, 2)))
-    dump_sequence(input_dna)
-# end
+    logger.output("===== DUMPING SEQUENCE =====")
+    logger.output("".join([seq[1] for seq in input]))
