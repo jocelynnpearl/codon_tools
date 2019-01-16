@@ -1,4 +1,7 @@
-# AA reverse translation and DNA optimization tool
+# Codon Tools
+Amino acid reverse translation and DNA optimization tool based on speciies-specific codon-use distributions.
+Species-specifc data can be found on the [Codon Usage Database](http://www.kazusa.or.jp) using the [NCBI Taxonomy database](http://www.ncbi.nlm.nih.gov/taxonomy) id (e.g. 413997) or the organism's Latin name (e.g. _Escherichia coli_ B). Mapping species names to Taxonomy IDs can be done [here](https://www.ncbi.nlm.nih.gov/Taxonomy/TaxIdentifier/tax_identifier.cgi).
+
 ## Use
 
 ```sh
@@ -19,17 +22,18 @@ ACDEFGHIKLMNPQRSTVWY
 >SEQ_2
 ACDEFGHIKLMNPQRSTVWY
 ```
+
 ## Features
 1. Reverse translates input amino acid sequence to DNA.
 2. Calculates the host's per-AA codon usage profile -- codons used less than a specified threshold (defaults to 10%) are dropped.
 3. Compares the reverse-translated DNA sequence to the host profile, determines which codons are overused/underused.
 4. Stochastically mutates codons according to host profile.
 5. Processes DNA to remove unwanted features:
-    a. high GC content within a sliding window and across the entire sequence
-    b. unwanted restriction sites
-    c. alternate start positions (GA-rich regions 18 bp upstream of ATG/GTG/TTG)
-    d. 3-consecutive identical codons and 9-mer repeat chunks
-    e. areas with more than 4 (variable) consecutive identical bps ("local homopolymers")
+    * high GC content within a sliding window and across the entire sequence
+    * unwanted restriction sites
+    * alternate start positions (GA-rich regions 18 bp upstream of ATG/GTG/TTG)
+    * 3-consecutive identical codons and 9-mer repeat chunks
+    * areas with more than 4 (variable) consecutive identical bps ("local homopolymers")
 
 The process is repeated from step 3 for a specified number of cycles (defaults to 1000) OR until the per-AA codon profile of current DNA and host profile matches (within tolerance).
 
