@@ -14,41 +14,6 @@ from Bio.SeqUtils import CodonUsage, GC, seq3
 from codon_tools.util import Seq, MutableSeq, codon_use, logging, log_levels
 from codon_tools.data import GC_content, RestrictionEnz, RibosomeBindingSites
 
-##########################################################
-#
-# 	Usage:
-# 		$python codon_tools.py --input INPUT_LIST.list
-#
-# 	Requires:
-# 		Biopython, Python 3.4
-#
-# 	You can install Biopython by:
-# 		$pip install biopython
-#
-# 	INPUT_LIST.list:
-# 		>SEQ_1
-# 		ACDEFGHIKLMNPQRSTVWY
-# 		>SEQ_2
-# 		ACDEFGHIKLMNPQRSTVWY
-#
-# 	What it does:
-# 		1) reverse translates your input AA into an arbitrary DNA sequence OR translates your input DNA into AA.
-# 		2) calculates the host's per-AA codon usage profile -- if the codon is used less than 10% (variable) of the time it is considered 0 instead.
-# 		3) compares the current DNA sequence to the host's profile and determine which codons are overused/underused.
-# 		4) stochastically mutates overused codons to underused codons.
-# 		5) runs a series of other checks and optimizations:
-# 			a) checks sequence for GC content and mutates codons to fall into a reasonable GC % (monte carlo)
-# 			b) checks for unwanted restriction sites, stochastically mutate the codons if found.
-# 			c) looks for all ATG/GTG/TTG sequences, then checks 18bp upstream of it for GA -rich regions. If found, mutate the codons.
-# 			d) looks for 3-consecutive identical codons and 9-mer repeat chunks (in frame to speed stuff up) and mutate them away.
-# 			e) checks for "local homopolymers", if there are areas with more than 4 (variable) consecutive identical bps, stochastically mutate the codons.
-# 		6) repeat from step 3.
-# 		7) cycles through until (variable) cycles are hit OR there the per-AA codon profile of current DNA and host profile matches, given a maximum deviation (and passes the checks).
-#
-# 	To do:
-# 		1) remove RNA structure from sequence
-#
-##########################################################
 
 # options
 parser = argparse.ArgumentParser(
