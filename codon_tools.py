@@ -221,7 +221,7 @@ def remove_local_homopolymers(dna_sequence, n_codons=2):
                 else len(mutable_seq),
             )
 
-            seq = mutable_seq[window].tostring()
+            seq = str(mutable_seq[window])
             nt_counts = {letter: seq.count(letter) for letter in set(seq)}
             letter = max(nt_counts, key=lambda letter: nt_counts[letter])
 
@@ -261,7 +261,8 @@ def remove_restriction_sites(dna_sequence, restrict_sites):
             # map sequence position to codon position
             # subtract 1 from `cut` to convert from sequence to string indexing
             codon_pos, offset = divmod((cut - 1) - (enz.size // 2), 3)
-            # ensure the whole codon we mutate is being recognized
+
+            # ensure the whole codon we mutate is being recognized by the restriction enzyme
             if offset:
                 codon_pos += 1
             codon_idx = slice(codon_pos * 3, (codon_pos + 1) * 3)
@@ -289,7 +290,7 @@ def remove_start_sites(dna_sequence, ribosome_binding_sites, table_name="Standar
         for m in re.finditer(start_codon, str(dna_sequence))
     ]
 
-    if len(start_codon_positions) == 0:
+    if not len(start_codon_positions):
         logger.info("No start codons found in sequence")
         return dna_sequence
 
@@ -310,7 +311,7 @@ def remove_start_sites(dna_sequence, ribosome_binding_sites, table_name="Standar
     for rbs_start in rbs_positions:
         # ignore 3 bp closest to xTG
         rbs_stop = rbs_start + _rbs_offset - 3
-        rbs_query_seq = mutable_seq[rbs_start:rbs_stop].tostring()
+        rbs_query_seq = str(mutable_seq[rbs_start:rbs_stop])
 
         logger.detail(
             "checking sequence: {0}.{1}".format(
@@ -323,17 +324,17 @@ def remove_start_sites(dna_sequence, ribosome_binding_sites, table_name="Standar
             logger.detail("checking start site: {0}, {1}".format(rbs, site))
             search = rbs_query_seq.find(site)
 
-            count = 0  # have a counter to prevent an infinite loop
+            count = 0  # counter to prevent infinite loop
             while search != -1 and count < 10:
                 # mutate residues if site is found
                 codon_pos = (search + rbs_start) // 3
                 for i in range(2):
                     codon_idx = slice((codon_pos + i) * 3, (codon_pos + i + 1) * 3)
                     new_codon = mutate_codon(mutable_seq[codon_idx], codon_use_table)
-                    mutate_codon[codon_idx] = new_codon
+                    mutable_seq[codon_idx] = new_codon
 
                 # reset sequence and search again
-                rbs_query_seq = mutable_seq[rbs_start : rbs_stop + 3].tostring()
+                rbs_query_seq = str(mutable_seq[rbs_start : rbs_stop + 3])
                 search = rbs_query_seq.find(site)
                 count += 1
 
@@ -389,7 +390,7 @@ def gc_scan(dna_sequence, window_size, low, high):
         logger.debug("Current segment: {0}".format(mutable_seq[window]))
 
         gc_percent = GC(mutable_seq[window]) / 100
-        count = 0  # have a counter to prevent an infinite loop
+        count = 0  # counter to prevent infinite loop
         # check gc_percent of current segment
         while (gc_percent < low or gc_percent > high) and count < codon_window * 2:
             position = random.randrange(0, len(mutable_seq[window]), 3)
@@ -465,7 +466,7 @@ def remove_repeating_sequences(dna_sequence, window_size):
 
             # check if the segment is found in the full sequence
             non_overlapping_matches = re.findall(
-                mutable_seq[window].tostring(), mutable_seq.tostring()
+                str(mutable_seq[window]), str(mutable_seq)
             )
             if len(non_overlapping_matches) > 1 and len(mutable_seq[window]) > 3:
                 logger.debug("Current window is repeated in the sequence")
@@ -505,11 +506,9 @@ for count, record in enumerate(records):
     logger.detail(str(dna))
 
     # TODO: compare input and host profiles
-    """
     # count codons and current profile
-    count_table = count_codons(dna)
-    input_profile = calc_profile(count_table)
-    """
+    count_table = codon_use.count_codons(dna)
+    input_profile = codon_use.calc_profile(count_table)
 
     # run optimization
     difference, current_cycle, relax = 1.0, 1, 1.0
@@ -574,4 +573,4 @@ for count, record in enumerate(records):
     # display final codon-use difference between host and current sequence (0.00 is ideal)
     logger.output("({0})".format(round(difference, 2)))
     logger.output("===== DUMPING SEQUENCE =====")
-    logger.output(dna.tostring())
+    logger.output(str(dna))
