@@ -12,7 +12,7 @@ from Bio.Restriction import Analysis
 from Bio.SeqUtils import CodonUsage, GC, seq3
 
 from codon_tools.util import Seq, MutableSeq, codon_use, logging, log_levels
-from codon_tools.data import GC_content, RestrictionEnz, RibosomeBindingSites
+from codon_tools.data import GC_content, RibosomeBindingSites, get_restriction_enzymes
 
 
 # options
@@ -497,7 +497,7 @@ for count, record in enumerate(records):
         for _, gc_content in GC_content.items():
             # check various GC content requirements
             dna = gc_scan(dna, **gc_content)
-        dna = remove_restriction_sites(dna, RestrictionEnz)
+        dna = remove_restriction_sites(dna, get_restriction_enzymes())
         dna = remove_start_sites(dna, RibosomeBindingSites, "Standard")
         dna = remove_repeating_sequences(dna, 9)
         dna = remove_local_homopolymers(dna)

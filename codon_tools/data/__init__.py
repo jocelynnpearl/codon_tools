@@ -1,6 +1,19 @@
-from Bio.Restriction import *
+from Bio import Restriction
 
-RestrictionEnz = RestrictionBatch((NdeI, XhoI, HpaI, PstI, EcoRV, NcoI, BamHI))
+
+_restriction_enzymes = ["NdeI", "XhoI", "HpaI", "PstI", "EcoRV", "NcoI", "BamHI"]
+
+
+def get_restriction_enzymes(restriction_enzymes=_restriction_enzymes):
+    return Restriction.RestrictionBatch(
+        [
+            getattr(Restriction, enz)
+            for enz in restriction_enzymes
+            if hasattr(Restriction, enz)
+        ]
+    )
+
+
 GC_content = {
     "IDT": {"window_size": 20, "low": 0.15, "high": 0.90},
     "twist": {"window_size": 50, "low": 0.15, "high": 0.80},
