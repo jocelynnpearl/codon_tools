@@ -1,24 +1,28 @@
-### TESTING BRIAN'S CODON TOOLS 
+TESTING BRIAN'S CODON TOOLS 
+------
+------
+2019 January 16
 
-# install repository on local machine
-git clone https://github.com/weitzner/codon_tools.git
+### Install repository on local machine
 
-# for any updates to repository
-git pull
+`git clone https://github.com/weitzner/codon_tools.git`
 
-# go into the directory
-cd codon_tools
+##### for any updates to repository
+`git pull`
 
-# build an environment for working here
-conda env create -f environment.yml
+##### go into the directory
+`cd codon_tools`
 
-#having issues with biopython ...
-echo layout conda codon_tools
-echo layout conda codon_tools > .envrc
-direnv allow
+##### build an environment for working here
+`conda env create -f environment.yml`
+
+##### I was having issues with biopython ...
+`echo layout conda codon_tools`
+`echo layout conda codon_tools > .envrc`
+`direnv allow`
 
 # check which environment you are working in
-conda env list
+`conda env list`
 
-# run codon_tools.py on list of sequences with Human codon usage specified:
-python codon_tools.py --input /Users/jpearl/codon_tools/FLUOR_SEQ_LIST.fasta --host 9606
+### *Run* codon_tools.py on list of sequences with Human codon usage specified:
+`python codon_tools.py --input /Users/jpearl/codon_tools/FLUOR_SEQ_LIST.fasta --host 9606`
