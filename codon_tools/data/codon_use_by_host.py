@@ -3,7 +3,7 @@
 # 4932   "Saccharomyces cerevisiae"
 # 9606   "Homo sapiens"
 
-latin_name_to_taxID = {
+latin_name_to_tax_id = {
     "Escherichia coli B": "413997",
     "Escherichia coli K-12": "83333",
     "Saccharomyces cerevisiae": "4932",
