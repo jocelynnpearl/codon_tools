@@ -1,7 +1,7 @@
 from Bio.SeqUtils import CodonUsage
 
 from . import Seq, logging
-from ..data.codon_use_by_host import codon_tables, host_name_to_taxID
+from ..data.codon_use_by_host import codon_tables, latin_name_to_taxID
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +40,8 @@ def _load_host_table(host):
     logger.info("===== PROCESSING HOST TABLE: {0} =====".format(host))
     table = CodonUsage.CodonsDict.copy()
 
-    if host not in codon_tables and host in host_name_to_taxID:
-        host = host_name_to_taxID[host]
+    if host not in codon_tables and host in latin_name_to_taxID:
+        host = latin_name_to_taxID[host]
 
     try:
         raw_table = codon_tables[host]
@@ -49,7 +49,7 @@ def _load_host_table(host):
         raise ValueError(
             '"{}" is not a valid host id. '.format(host)
             + "Currently supported hosts (Latin and NCBI taxonomy IDs) are {}".format(
-                host, ", ".join(host_name_to_taxID.keys() + codon_tables.keys())
+                host, ", ".join(latin_name_to_taxID.keys() + codon_tables.keys())
             )
         )
     else:
