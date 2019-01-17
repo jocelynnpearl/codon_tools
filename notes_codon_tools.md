@@ -18,7 +18,9 @@ TESTING BRIAN'S CODON TOOLS
 
 ##### I was having issues with biopython ...
 `echo layout conda codon_tools`
+
 `echo layout conda codon_tools > .envrc`
+
 `direnv allow`
 
 # check which environment you are working in
