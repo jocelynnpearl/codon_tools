@@ -1,7 +1,7 @@
-import os.path
-
 from Bio.SeqUtils import CodonUsage
-from codon_tools.util import Seq, logging
+
+from . import Seq, logging
+from ..data.codon_use_by_host import codon_tables, host_name_to_taxID
 
 logger = logging.getLogger(__name__)
 
@@ -40,19 +40,22 @@ def _load_host_table(host):
     logger.info("===== PROCESSING HOST TABLE: {0} =====".format(host))
     table = CodonUsage.CodonsDict.copy()
 
-    # TODO: move to an importable format for the codon tables
-    dirname = os.path.dirname(__file__)
-    filename = os.path.join(
-        dirname, "../../template_files/codon_tables/{0}.txt".format(host)
-    )
-    with open(filename, "r") as inputfile:
-        for line in inputfile:
-            codon, _, count = line.split()
+    if host not in codon_tables and host in host_name_to_taxID:
+        host = host_name_to_taxID[host]
 
-            if codon == "\0":
-                continue
+    try:
+        raw_table = codon_tables[host]
+    except KeyError:
+        raise ValueError(
+            '"{}" is not a valid host id. '.format(host)
+            + "Currently supported hosts (Latin and NCBI taxonomy IDs) are {}".format(
+                host, ", ".join(host_name_to_taxID.keys() + codon_tables.keys())
+            )
+        )
+    else:
+        for codon, usage in raw_table.items():
             # codons are stored with RNA alphabet
-            table[str(Seq(codon).back_transcribe())] = int(count)
+            table[str(Seq(codon).back_transcribe())] = usage["count"]
 
     return calc_profile(table)
 
